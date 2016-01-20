@@ -28,17 +28,26 @@ class Taxon < OpenStruct
                        join publication p on p.id = b.publication_id
                        join authority a on a.Weeks=bi.primary_authority_id
                      where r.id = #{id}").first
-   self.references[id] = OpenStruct.new(res.merge(original: original))
+   self.references[id] = OpenStruct.new(res.merge(original: original)) if res
   end
 
   def authorship
     ref = self.references[self.orig_ref_id]
-    authorship = "%{short_name}" % ref
-    puts authorship
-    # "(#{authorship})" if self.genus_id != self.orig_genus_id
-    puts ""
+    authorship = ref ? normalize_authorship(ref.short_name) : nil
+    year = ref ? ref.year : nil
+    authorship = "%s, %s" % [authorship, year] if authorship && year
+    self.genus_id != self.orig_genus_id ? "(#{authorship})" : authorship
   end
 
+  def sci_name
+    [self.name, self.authorship].join(" ")
+  end
+
+  private
+  def normalize_authorship(authorship)
+    return authorship unless authorship
+    authorship.gsub(/^(.*), ([A-Z]\.)(.*)$/, '\2 \1\3')
+  end
 end
 
 class Reference < OpenStruct
@@ -61,9 +70,10 @@ class Col
     valid_taxa.each do |t|
       @taxon = Taxon.new(t.merge(references: {}))
       @taxon.reference(@taxon.orig_ref_id, true)
-      @taxon.complete_name =
-      require "byebug"; byebug
-      puts ""
+      puts @taxon.sci_name
+      @taxon.references.each do |k, v|
+        puts "  %s %s" % [k, v.comment]
+      end
     end
   end
 
