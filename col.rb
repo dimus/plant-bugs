@@ -49,7 +49,33 @@ class Taxon < OpenStruct
   end
 
   def sci_name
-    [self.name, self.authorship].join(" ")
+    [self.fix_subgenus, self.authorship].join(" ")
+  end
+
+  def fix_subgenus
+    parts = name.split(/\s+/)
+    parts[1] = "(#{parts[1]})" if parts[1] && parts[1].match(/^[A-Z]/)
+    parts.join(" ")
+  end
+
+  def populate
+    populate_refs
+    @obj = { id: id, parend_id: parent_taxon_id,
+              name: sci_name, canonical: fix_subgenus,
+              subgenus: subgenus == "undefined" ? nil : subgenus,
+              authorship: authorship,
+              refs: []}
+    references.each do |k, v|
+      @obj[:refs] << { id: k, orig: v.original,  author: v.long_name,
+                       year: (v.pub_year || v.year), title: v.title,
+                       details: v.details,
+                       distribution: v.distribution, comment: v.comment}
+    end
+    self
+  end
+
+  def obj
+    @obj
   end
 
   private
@@ -60,13 +86,13 @@ class Taxon < OpenStruct
 end
 
 class Reference < OpenStruct
-  # def reformat_authors
+  def reformat_authors
   #   first_author = /^(([^,]+),(\s*[A-Z]\.*?)+(,\s*Jr\.)?)(,|and|$)/
   #   puts long_name
   #   match = long_name.match(first_author)
   #   au = match ? match[1] : "???"
   #   puts au
-  # end
+  end
 end
 
 class Col
@@ -78,46 +104,38 @@ class Col
   end
 
   def valid_taxa
-    Db.query("select * from taxon where availability='valid'")
-             # and id in (11428, 146, 14617, 10154, 16342)")
+    Db.query("select t.*, ts.name as subgenus
+              from taxon t
+                join taxon_subgenus ts on ts.id = t.subgenus_id
+              where availability='valid' and rank = 'species'")
+              # and t.id in (11428, 146, 14617, 10154, 16342)")
   end
 
   def traverse_taxa
     res = []
-    valid_taxa.each do |t|
-      @taxon = Taxon.new(t.merge(references: {}))
-      @taxon.populate_refs
-      taxon = { id: @taxon.id, name: @taxon.sci_name, refs: [], syns: [] }
-      @taxon.references.each do |k, v|
-        taxon[:refs] << { id: k, orig: v.original,  author: v.long_name,
-                         year: v.pub_year, title: v.title, details: v.details,
-                         distribution: v.distribution, comment: v.comment}
-      end
-      taxon[:syns] = collect_synonyms
+    valid_taxa.each_with_index do |t, i|
+      puts "Going through %s taxon" % i if i % 100 == 0
+
+      taxon = Taxon.new(t.merge(references: {})).populate.obj
+      taxon[:syns] = collect_synonyms(taxon[:id])
       res << taxon
     end
-    puts res.to_json
+    w = open("t.json", "w:utf-8")
+    w.write res.to_json
+    w.close
   end
 
-  def collect_synonyms
+  def collect_synonyms(taxon_id)
     res = []
     synonyms = Db.query("select *
                            from taxon
                            where id in (
                              select junior_taxon_id
                                from synonym
-                               where senior_taxon_id = #{@taxon.id}
+                               where senior_taxon_id = #{taxon_id}
                                  and junior_taxon_id != senior_taxon_id)")
     synonyms.each do |s|
-      @synonym = Taxon.new(s.merge(references: {}))
-      @synonym.populate_refs
-      taxon = { id: @synonym.id, name: @synonym.sci_name, refs: [] }
-      @synonym.references.each do |k, v|
-        taxon[:refs] << { id: k, orig: v.original,  author: v.long_name,
-                         year: v.pub_year, title: v.title, details: v.details,
-                         distribution: v.distribution, comment: v.comment}
-      end
-      res << taxon
+      res << Taxon.new(s.merge(references: {})).populate.obj
     end
     res
   end
