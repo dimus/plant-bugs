@@ -46,31 +46,54 @@ class Formatter
     @data.each_with_index do |d, i|
       @distributions = []
       puts "Processing %s data" % i if i % 1000 == 0
-      parsed = @parser.parse(d[:canonical])[:scientificName]
+      begin
+        parsed = @parser.parse(d[:canonical])[:scientificName]
+      rescue
+        puts "Parser problem: %s" % d[:name]
+        @parser = ScientificNameParser.new
+        next
+      end
       append_accepted_species(d, parsed)
       append_references(d[:id], d[:refs], "TaxAccRef")
       append_synonyms(d[:id], d[:syns])
       append_distribution(d[:id])
-      break if i > 100
     end
   end
 
   def append_synonyms(taxon_id, syns)
     syns.each do |s|
-      parsed = @parser.parse(s[:name])[:scientificName]
-      infrasp = parsed[:details][:infraspecies] rescue nil
-      infrasp_rank = nil
+      begin
+        parsed = @parser.parse(s[:name])[:scientificName]
+      rescue
+        puts "Parser problem: %s" % s[:name]
+        @parser = ScientificNameParser.new
+        next
+      end
+      authorship = s[:authorship]
+      infrasp = parsed[:details][0][:infraspecies] rescue nil
+      infrasp_rank = infrasp_authorship = infrasp_name = nil
       next if infrasp && infrasp.size > 1
-      genus = parsed[:details].first[:genus][:string]
-      subgenus = parsed[:details].first[:subgenus][:string] rescue nil
+      unless parsed[:details][0][:genus]
+        puts "No genus: %s" % s[:name]
+        next
+      end
+      genus = parsed[:details][0][:genus][:string]
+      subgenus = parsed[:details][0][:infragenus][:string] rescue nil
+      unless parsed[:details][0][:species]
+        puts "No species: %s" % s[:name]
+        next
+      end
       species = parsed[:details].first[:species][:string]
       if infrasp
         infrasp_rank = infrasp[0][:rank]
-        inrfrasp = infrasp[0][:string]
+        infrasp_rank = nil if infrasp_rank == "n/a"
+        infrasp_name = infrasp[0][:string]
+        infrasp_authorship = authorship
+        authorship = nil
       end
       @tables[:synonyms] << [s[:id], taxon_id, genus, subgenus, species,
-                            infrasp, infrasp_rank, s[:authorship],
-                            nil, nil, nil]
+                             authorship, infrasp_name, infrasp_rank,
+                             infrasp_authorship, nil, nil, nil]
       append_references(s[:id], s[:refs], "Synonym")
     end
   end
@@ -82,10 +105,10 @@ class Formatter
     @tables[:distribution] << [taxon_id, d, nil, nil]
   end
 
-  def append_references(taxon_id, refs, type)
+  def append_references(taxon_id, refs, default_type)
     refs.each do |r|
       ref = [r[:id], r[:author], r[:year], r[:title], r[:details]]
-      type = r[:orig] ? "Nomenclatural" : type
+      type = r[:orig] ? "Nomenclatural" : default_type
       @distributions << r[:distribution]
       @tables[:references] << ref
       @tables[:name_references_links] << [taxon_id, type, r[:id]]
@@ -100,7 +123,6 @@ class Formatter
           nil, nil, nil, "#{URL}#{data[:id]}", nil, nil]
     @tables[:accepted_species] << as
   end
-
 
   private
   def file(name)
