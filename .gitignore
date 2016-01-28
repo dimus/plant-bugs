@@ -1,5 +1,5 @@
-mzip
-*csv
+*.zip
+*.csv
 t
 tt
 t.json
